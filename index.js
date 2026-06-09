@@ -4,7 +4,7 @@ const { createClient } = require('@supabase/supabase-js');
 
 const app = express();
 
-// Configuração permissiva de CORS para a Vercel
+// Configuração robusta de CORS para evitar bloqueios no navegador
 app.use(cors({
     origin: '*',
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
@@ -12,7 +12,7 @@ app.use(cors({
     credentials: true
 }));
 
-// Middleware para garantir que requisições OPTIONS (Preflight) passem direto
+// Middleware para responder imediatamente às requisições de teste (OPTIONS) do CORS
 app.use((req, res, next) => {
     res.header('Access-Control-Allow-Origin', '*');
     res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
@@ -30,13 +30,13 @@ const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_KEY;
 const supabase = createClient(supabaseUrl, supabaseKey);
 
-// Rota base de teste na raiz
+// Rota de teste na raiz do servidor
 app.get('/', (req, res) => {
     res.json({ message: 'API online e integrada ao Supabase!', status: 'online' });
 });
 
-// ============ LÓGICA DA ROTA DE AUTENTICAÇÃO UNIFICADA ============
-async function executarLoginCadastro(req, res) {
+// ============ FUNÇÃO AUXILIAR DA ROTA DE AUTENTICAÇÃO ============
+async function tratarLoginCadastro(req, res) {
     const { rm, nome, turma } = req.body;
 
     if (!rm) {
@@ -60,12 +60,12 @@ async function executarLoginCadastro(req, res) {
             return res.json({ message: 'Login efetuado com sucesso!', aluno: alunoExistente });
         }
 
-        // Se não encontrou e faltam dados, não cria
+        // Se não encontrou e faltam dados, não cria (É uma tentativa de login inválida)
         if (!nome || !turma) {
             return res.status(404).json({ error: 'RM não cadastrado. Preencha todos os campos para se cadastrar.' });
         }
 
-        // Se não encontrou e tem os dados, faz o Cadastro
+        // Se não encontrou e tem os dados, faz o Cadastro completo
         const { data: novoAluno, error: erroInsercao } = await supabase
             .from('alunos')
             .insert([{ rm, nome, turma }])
@@ -83,15 +83,16 @@ async function executarLoginCadastro(req, res) {
     }
 }
 
-// Mapeia os dois caminhos possíveis para evitar o erro 404 na Vercel
-app.post('/api/auth/login-ou-cadastro', executarLoginCadastro);
-app.post('/auth/login-ou-cadastro', executarLoginCadastro);
+// SOLUÇÃO DO 404: Escuta a rota com e sem o prefixo /api que a Vercel altera
+app.post('/api/auth/login-ou-cadastro', tratarLoginCadastro);
+app.post('/auth/login-ou-cadastro', tratarLoginCadastro);
 
 
-// Auxiliar para pegar RM de qualquer lugar (Query string ou Headers)
+// Auxiliar para capturar o RM enviado pelo Front-end (via Query string ou via Headers)
 const obterRM = (req) => req.query.rm || req.headers.rm || req.headers['rm'];
 
-// Lógica de tratamento das rotas de leitura mapeando ambas as possibilidades de rota
+// ============ MAPEAMENTO DAS ROTAS DE LEITURA (DUPLO CAMINHO) ============
+
 app.get(['/api/leitura/termometro', '/leitura/termometro'], async (req, res) => {
     try {
         const { data, error } = await supabase.from('registros_leitura').select('minutos');
