@@ -1,122 +1,129 @@
 const supabase = require('../services/supabaseClient');
 
+// Registrar minutos lidos (Limite de 16 min por dia)
 async function registrarMinutos(req, res) {
   const { minutos } = req.body;
   const alunoId = req.aluno.id;
-  const hoje = new Date().toISOString().split('T')[0];
+  
+  const hoje = new Date().toLocaleString("sv-SE", { timeZone: "America/Sao_Paulo" }).split(" ")[0];
 
-  // VALIDAÇÃO BACK-END 16 min/dia
-  if (minutos > 16) {
-    return res.status(400).json({
-      error: 'Você não pode registrar mais de 16 minutos por dia!'
-    });
+  if (!minutos || minutos <= 0 || minutos > 16) {
+    return res.status(400).json({ error: 'Minutos inválidos (deve ser entre 1 e 16)' });
   }
 
-  if (minutos <= 0) {
-    return res.status(400).json({ error: 'Minutos devem ser maiores que zero' });
+  try {
+    const { data: registrosHoje, error: selectError } = await supabase
+      .from('registros_leitura')
+      .select('minutos')
+      .eq('aluno_id', alunoId)
+      .eq('data_registro', hoje);
+
+    if (selectError) {
+      return res.status(500).json({ error: 'Erro ao verificar registros de hoje' });
+    }
+
+    const totalHoje = registrosHoje.reduce((sum, r) => sum + r.minutos, 0);
+
+    if (totalHoje + minutos > 16) {
+      const restante = 16 - totalHoje;
+      return res.status(400).json({
+        error: `Limite diário de 16 minutos atingido. Você já leu ${totalHoje} min hoje. Restam apenas ${restante} min.`
+      });
+    }
+
+    const { error: insertError } = await supabase
+      .from('registros_leitura')
+      .insert([{ aluno_id: alunoId, minutos, data_registro: hoje }]);
+
+    if (insertError) {
+      return res.status(500).json({ error: 'Erro ao salvar o registro de leitura' });
+    }
+
+    return res.json({ success: true, message: 'Leitura registrada com sucesso!' });
+  } catch (e) {
+    return res.status(500).json({ error: 'Erro interno no servidor: ' + e.message });
   }
-
-  // Buscar registros de hoje
-  const { data: registrosHoje, error: selectError } = await supabase
-    .from('registros_leitura')
-    .select('minutos')
-    .eq('aluno_id', alunoId)
-    .eq('data_registro', hoje);
-
-  if (selectError) {
-    return res.status(500).json({ error: 'Erro ao verificar registros' });
-  }
-
-  const totalHoje = registrosHoje.reduce((sum, r) => sum + r.minutos, 0);
-
-  if (totalHoje + minutos > 16) {
-    const restante = 16 - totalHoje;
-    return res.status(400).json({
-      error: `Você já leu ${totalHoje} min hoje. Só pode adicionar mais ${restante} min.`
-    });
-  }
-
-  // Inserir novo registro
-  const { data, error } = await supabase
-    .from('registros_leitura')
-    .insert([{
-      aluno_id: alunoId,
-      minutos: minutos,
-      data_registro: hoje
-    }]);
-
-  if (error) {
-    return res.status(500).json({ error: 'Erro ao salvar registro' });
-  }
-
-  res.status(201).json({
-    success: true,
-    message: 'Leitura registrada com sucesso!',
-    minutos_registrados: minutos,
-    total_hoje: totalHoje + minutos
-  });
 }
 
-// Progresso individual na semana
+// Progresso semanal do usuário conectado
 async function progressoSemana(req, res) {
   const alunoId = req.aluno.id;
-  const hoje = new Date();
-  const dataInicio = new Date();
-  dataInicio.setDate(hoje.getDate() - 6);
+  
+  try {
+    const { data, error } = await supabase
+      .from('registros_leitura')
+      .select('minutos, data_registro')
+      .eq('aluno_id', alunoId);
 
-  const { data, error } = await supabase
-    .from('registros_leitura')
-    .select('minutos, data_registro')
-    .eq('aluno_id', alunoId)
-    .gte('data_registro', dataInicio.toISOString().split('T')[0])
-    .lte('data_registro', hoje.toISOString().split('T')[0]);
+    if (error) {
+      return res.status(500).json({ error: 'Erro ao buscar progresso do aluno' });
+    }
 
-  if (error) {
-    return res.status(500).json({ error: 'Erro ao buscar progresso' });
+    return res.json({ progresso: data || [] });
+  } catch (e) {
+    return res.status(500).json({ error: 'Erro interno: ' + e.message });
   }
-
-  res.json({ progresso: data });
 }
 
-// Termômetro geral (total escola)
+// Termômetro geral (Soma total da escola)
 async function termometroGeral(req, res) {
-  const { data, error } = await supabase
-    .from('registros_leitura')
-    .select('minutos');
+  try {
+    const { data, error } = await supabase
+      .from('registros_leitura')
+      .select('minutos');
 
-  if (error) {
-    return res.status(500).json({ error: 'Erro ao buscar total' });
+    if (error) {
+      return res.status(500).json({ error: 'Erro ao buscar dados do termômetro' });
+    }
+
+    const totalMinutos = data.reduce((sum, r) => sum + r.minutos, 0);
+    return res.json({ total_escola: totalMinutos, meta: 1000000 });
+  } catch (e) {
+    return res.status(500).json({ error: 'Erro interno: ' + e.message });
   }
-
-  const totalMinutos = data.reduce((sum, r) => sum + r.minutos, 0);
-  res.json({ total_escola: totalMinutos, meta: 1000000 });
 }
 
-// Ranking por turma
+// ============ RANKING DIÁRIO POR TURMA (QUEM LEU MAIS HOJE) ============
 async function rankingTurmas(req, res) {
-  const { data, error } = await supabase
-    .from('registros_leitura')
-    .select(`
-      minutos,
-      alunos!inner (turma)
-    `);
+  try {
+    // Pega a data de hoje no formato YYYY-MM-DD (Fuso de São Paulo)
+    const hoje = new Date().toLocaleString("sv-SE", { timeZone: "America/Sao_Paulo" }).split(" ")[0];
 
-  if (error) {
-    return res.status(500).json({ error: 'Erro ao gerar ranking' });
+    // Busca APENAS as leituras feitas HOJE e traz a turma do aluno correspondente
+    const { data, error } = await supabase
+      .from('registros_leitura')
+      .select('minutos, alunos(turma)')
+      .eq('data_registro', hoje);
+
+    if (error) {
+      console.error('Erro na consulta do Supabase para o ranking:', error);
+      return res.status(500).json({ error: 'Erro ao processar dados do ranking' });
+    }
+
+    // Se ninguém leu nada hoje ainda, retorna uma lista vazia pro front saber que tá zerado
+    if (!data || data.length === 0) {
+      return res.json([]);
+    }
+
+    // Agrupa e soma os minutos de cada turma manualmente (Garante funcionamento)
+    const turmas = {};
+    data.forEach(reg => {
+      const turma = reg.alunos?.turma;
+      if (turma) {
+        turmas[turma] = (turmas[turma] || 0) + reg.minutos;
+      }
+    });
+
+    // Converte o objeto em array e ordena do MAIOR total para o MENOR total
+    const ranking = Object.entries(turmas)
+      .map(([turma, total]) => ({ turma, total }))
+      .sort((a, b) => b.total - a.total);
+
+    return res.json(ranking);
+  } catch (e) {
+    console.error('Erro interno na rota de ranking:', e);
+    return res.status(500).json({ error: 'Erro interno no servidor' });
   }
-
-  const turmas = {};
-  data.forEach(reg => {
-    const turma = reg.alunos.turma;
-    if (!turmas[turma]) turmas[turma] = 0;
-    turmas[turma] += reg.minutos;
-  });
-
-  const ranking = Object.entries(turmas)
-    .map(([turma, total]) => ({ turma, total }))
-    .sort((a, b) => b.total - a.total);
-
-  res.json(ranking);
 }
 
 module.exports = {
