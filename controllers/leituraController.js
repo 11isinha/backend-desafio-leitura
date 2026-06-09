@@ -83,54 +83,47 @@ async function termometroGeral(req, res) {
   }
 }
 
-// ============ RANKING DIÁRIO SEGURO E BLINDADO (QUEM LEU MAIS HOJE) ============
+// RANKING DIÁRIO SEGURO E BLINDADO (QUEM LEU MAIS HOJE)
 async function rankingTurmas(req, res) {
   try {
-    // 1. Pega a data de hoje (Fuso de São Paulo) -> Ex: "2026-06-09"
     const hoje = new Date().toLocaleString("sv-SE", { timeZone: "America/Sao_Paulo" }).split(" ")[0];
 
-    // 2. Busca TODOS os alunos para sabermos a turma de cada um
+    // Busca todos os alunos para mapear as turmas de forma independente
     const { data: todosAlunos, error: erroAlunos } = await supabase
       .from('alunos')
       .select('id, turma');
 
     if (erroAlunos) {
-      console.error('Erro ao buscar alunos para o ranking:', erroAlunos);
-      return res.status(500).json({ error: 'Erro ao processar alunos' });
+      return res.status(500).json({ error: 'Erro ao processar alunos para o ranking' });
     }
 
-    // 3. Busca APENAS as leituras feitas HOJE
+    // Busca apenas as leituras de hoje
     const { data: leiturasHoje, error: erroLeituras } = await supabase
       .from('registros_leitura')
       .select('aluno_id, minutos')
       .eq('data_registro', hoje);
 
     if (erroLeituras) {
-      console.error('Erro ao buscar leituras de hoje para o ranking:', erroLeituras);
-      return res.status(500).json({ error: 'Erro ao processar leituras' });
+      return res.status(500).json({ error: 'Erro ao processar leituras para o ranking' });
     }
 
-    // Se ninguém leu nada hoje ainda, retorna lista vazia para o front sair do "Carregando..."
     if (!leiturasHoje || leiturasHoje.length === 0) {
       return res.json([]);
     }
 
-    // 4. Cria um mapa de ID do Aluno para a Turma dele para facilitar a consulta rápido
     const mapaAlunosTurma = {};
     todosAlunos.forEach(aluno => {
       mapaAlunosTurma[aluno.id] = aluno.turma;
     });
 
-    // 5. Agrupa e soma os minutos por turma
     const minutosPorTurma = {};
     leiturasHoje.forEach(reg => {
-      const turma do Aluno = mapaAlunosTurma[reg.aluno_id];
-      if (turma do Aluno) {
-        minutosPorTurma[turma do Aluno] = (minutosPorTurma[turma do Aluno] || 0) + reg.minutos;
+      const turmaAluno = mapaAlunosTurma[reg.aluno_id];
+      if (turmaAluno) {
+        minutosPorTurma[turmaAluno] = (minutosPorTurma[turmaAluno] || 0) + reg.minutos;
       }
     });
 
-    // 6. Transforma em Array e ordena do MAIOR para o MENOR total de minutos do dia
     const rankingFinal = Object.entries(minutosPorTurma)
       .map(([turma, total]) => ({ turma, total }))
       .sort((a, b) => b.total - a.total);
@@ -138,8 +131,7 @@ async function rankingTurmas(req, res) {
     return res.json(rankingFinal);
 
   } catch (e) {
-    console.error('Erro crítico interno na rota de ranking:', e);
-    return res.status(500).json({ error: 'Erro interno no servidor' });
+    return res.status(500).json({ error: 'Erro interno no servidor: ' + e.message });
   }
 }
 
