@@ -8,11 +8,14 @@ const {
   rankingTurmas
 } = require('../controllers/leituraController');
 
+// 🔓 ROTAS PÚBLICAS (Acessíveis livremente)
+router.get('/termometro', termometroGeral);
+router.get('/ranking', rankingTurmas);
+
+// 🔐 BARREIRA DE AUTENTICAÇÃO (Bloqueia o que está abaixo)
 router.use(authMiddleware);
 
 router.post('/registrar', registrarMinutos);
 router.get('/progresso', progressoSemana);
-router.get('/termometro', termometroGeral);
-router.get('/ranking', rankingTurmas);
 
 module.exports = router;
