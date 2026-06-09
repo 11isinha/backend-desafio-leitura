@@ -4,8 +4,25 @@ const { createClient } = require('@supabase/supabase-js');
 
 const app = express();
 
-// O CORS DEVE VIR ANTES DE TODAS AS ROTAS
-app.use(cors());
+// 1. CONFIGURAÇÃO AVANÇADA DE CORS PARA A VERCEL
+app.use(cors({
+    origin: '*',
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'rm'],
+    credentials: true
+}));
+
+// Middleware extra para garantir que requisições OPTIONS (Preflight) nunca travem
+app.use((req, res, next) => {
+    res.header('Access-Control-Allow-Origin', '*');
+    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, rm');
+    if (req.method === 'OPTIONS') {
+        return res.status(200).end();
+    }
+    next();
+});
+
 app.use(express.json());
 
 // Supabase
@@ -15,7 +32,7 @@ const supabase = createClient(supabaseUrl, supabaseKey);
 
 // Rota base de teste
 app.get('/', (req, res) => {
-    res.json({ message: 'API online e integrada ao Supabase!' });
+    res.json({ message: 'API online e integrada ao Supabase!', status: 'online' });
 });
 
 // ============ ROTA DE AUTENTICAÇÃO (LOGIN OU CADASTRO) ============
@@ -45,7 +62,7 @@ app.post('/api/auth/login-ou-cadastro', async (req, res) => {
 
         // Se não encontrou e faltam dados, não cria
         if (!nome || !turma) {
-            return res.status(404).json({ error: 'RM não encontrado. Preenche todos os campos para te registares.' });
+            return res.status(404).json({ error: 'RM não cadastrado. Preencha todos os campos para se cadastrar.' });
         }
 
         // Se não encontrou e tem os dados, faz o Cadastro
@@ -66,13 +83,14 @@ app.post('/api/auth/login-ou-cadastro', async (req, res) => {
     }
 });
 
-// ============ AUXILIAR PARA PEGAR RM DE QUALQUER LUGAR ============
+// Auxiliar para pegar RM de qualquer lugar (Query string ou Headers)
 const obterRM = (req) => req.query.rm || req.headers.rm || req.headers['rm'];
 
 // ============ TERMÔMETRO ============
 app.get('/api/leitura/termometro', async (req, res) => {
     try {
-        const { data } = await supabase.from('registros_leitura').select('minutos');
+        const { data, error } = await supabase.from('registros_leitura').select('minutos');
+        if (error) throw error;
         const total = data?.reduce((s, r) => s + r.minutos, 0) || 0;
         res.json({ total_escola: total, meta: 1000000 });
     } catch (e) {
@@ -83,16 +101,19 @@ app.get('/api/leitura/termometro', async (req, res) => {
 // ============ RANKING ============
 app.get('/api/leitura/ranking', async (req, res) => {
     try {
+        // Fallback dinâmico caso a relação nomeada !inner falhe no banco de dados do Supabase
         const { data, error } = await supabase
             .from('registros_leitura')
-            .select('minutos, alunos!inner(turma)');
+            .select('minutos, alunos(turma)');
         
         if (error || !data) return res.json([]);
         
         const turmas = {};
         data.forEach(reg => {
             const turma = reg.alunos?.turma;
-            if (turma) turmas[turma] = (turmas[turma] || 0) + reg.minutos;
+            if (turma) {
+                turmas[turma] = (turmas[turma] || 0) + reg.minutos;
+            }
         });
         
         const ranking = Object.entries(turmas)
@@ -116,10 +137,12 @@ app.get('/api/leitura/progresso', async (req, res) => {
         
         if (erroAluno || !aluno) return res.status(401).json({ error: 'Aluno não encontrado' });
 
-        const { data: registros } = await supabase
+        const { data: registros, error: erroRegistros } = await supabase
             .from('registros_leitura')
             .select('minutos, data_registro')
             .eq('aluno_id', aluno.id);
+        
+        if (erroRegistros) throw erroRegistros;
         
         res.json({ progresso: registros || [] });
     } catch (e) {
@@ -141,7 +164,9 @@ app.post('/api/leitura/registrar', async (req, res) => {
         
         if (erroAluno || !aluno) return res.status(401).json({ error: 'Aluno não encontrado' });
 
-        const hoje = new Date().toISOString().split('T')[0];
+        // Garante data local no formato correto YYYY-MM-DD baseado no fuso do Brasil
+        const hoje = new Date().toLocaleString("sv-SE", { timeZone: "America/Sao_Paulo" }).split(" ")[0];
+        
         const { data: registrosHoje } = await supabase
             .from('registros_leitura')
             .select('minutos')
@@ -150,7 +175,7 @@ app.post('/api/leitura/registrar', async (req, res) => {
         
         const totalHoje = registrosHoje?.reduce((s, r) => s + r.minutos, 0) || 0;
         if (totalHoje + minutos > 16) {
-            return res.status(400).json({ error: `Limite diário atingido. Já leste ${totalHoje} min hoje.` });
+            return res.status(400).json({ error: `Limite diário atingido. Você já leu ${totalHoje} min hoje.` });
         }
 
         const { error: insertError } = await supabase
@@ -159,7 +184,7 @@ app.post('/api/leitura/registrar', async (req, res) => {
         
         if (insertError) return res.status(500).json({ error: 'Erro ao salvar leitura' });
         
-        res.json({ success: true, message: 'Leitura registada com sucesso!' });
+        res.json({ success: true, message: 'Leitura registrada com sucesso!' });
     } catch (e) {
         res.status(500).json({ error: e.message });
     }
